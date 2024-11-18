@@ -33,11 +33,19 @@ def validate_value(component, value):
 
 @hvac_router.post('/hvac/{component}/{value}')
 async def set_hvac_value(component: str, value: int):
-    if validate_component(component) and validate_value(component, value):
-        status["HVAC"][component] = value
-        return {component: value}
-    else:
-        raise HTTPException(status_code=400, detail="Invalid component or value")
+    if component not in status["HVAC"]:
+        raise HTTPException(status_code=400, detail="Invalid component")
+        
+    if component == "Temperature" and not 0 <= value <= 100:
+        raise HTTPException(status_code=400, detail="Invalid temperature value")
+    elif component == "FanSpeed" and not 0 <= value <= 100:
+        raise HTTPException(status_code=400, detail="Invalid fan speed value")
+    elif component in ["ACStatus", "ACBlowToSeatFrontRight", "ACBlowToSeatFrontLeft", 
+                      "ACBlowToSeatRearRight", "ACBlowToSeatRearLeft"] and value not in [0, 1]:
+        raise HTTPException(status_code=400, detail="Invalid value for this component")
+        
+    status["HVAC"][component] = value
+    return {"component": component, "property": "value", "value": value}
 
 @hvac_router.get('/hvac/{component}')
 async def get_hvac_value(component: str):

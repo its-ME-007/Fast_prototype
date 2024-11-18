@@ -1,7 +1,11 @@
 import uvicorn
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from concurrent.futures import ThreadPoolExecutor
+from request_queue_manager import request_queue_manager
+from starlette.middleware.base import BaseHTTPMiddleware
+import json
 
 # Import routers (equivalent of blueprints in Flask)
 from intlight import int_lighting_router
@@ -26,10 +30,46 @@ from tyre import tyre_router
 from seatf import seat_router
 from bmsf import bms_router
 
+class QueueMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Only queue POST requests
+        if request.method == "POST":
+            try:
+                # Get the response data
+                response_body = b""
+                async for chunk in response.body_iterator:
+                    response_body += chunk
+                
+                # Decode and queue the response
+                response_data = response_body.decode()
+                await request_queue_manager.add_request(response_data)
+                print(f"Successfully queued response: {response_data}")
+                
+                # Create a new response with the same data
+                return JSONResponse(
+                    content=json.loads(response_data),
+                    status_code=response.status_code,
+                    headers=dict(response.headers)
+                )
+            except Exception as e:
+                print(f"Error in middleware: {str(e)}")
+                
+        return response
+
 # Main Application
 def create_main_app():
     app = FastAPI()
-
+    
+    # Add the queue middleware
+    app.add_middleware(QueueMiddleware)
+    
+    # Start the request processor
+    @app.on_event("startup")
+    async def startup_event():
+        asyncio.create_task(request_queue_manager.process_requests())
+    
     @app.get("/")
     async def index():
         return {
@@ -54,11 +94,17 @@ def create_main_app():
     async def not_found_exception_handler(request: Request, exc):
         return JSONResponse(status_code=404, content={"error": "Page not found"})
 
+    # Add this endpoint to check queue status
+    @app.get("/queue-status")
+    async def get_queue_status():
+        return request_queue_manager.get_queue_status()
+
     return app
 
 # Lighting Application
 def create_lighting_app():
     app = FastAPI()
+    app.add_middleware(QueueMiddleware)
     app.include_router(int_lighting_router)
     app.include_router(ext_lighting_router)
     return app
@@ -117,6 +163,7 @@ def create_controlunitstatus_app():
 # HVAC Application
 def create_hvac_app():
     app = FastAPI()
+    app.add_middleware(QueueMiddleware)
     app.include_router(hvac_router)
     return app
 
